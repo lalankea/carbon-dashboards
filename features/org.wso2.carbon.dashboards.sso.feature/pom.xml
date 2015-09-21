@@ -23,9 +23,9 @@
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
-    <artifactId>org.wso2.carbon.dashboards.portal.feature</artifactId>
+    <artifactId>org.wso2.carbon.dashboards.sso.feature</artifactId>
     <packaging>pom</packaging>
-    <name>WSO2 Carbon - Portal Feature</name>
+    <name>WSO2 Carbon - SSO Feature</name>
     <url>http://wso2.org</url>
 
     <build>
@@ -52,16 +52,16 @@
                         </configuration>
                     </execution>
                     <execution>
-                        <id>copy-portal-app</id>
+                        <id>copy-sso-app</id>
                         <phase>generate-resources</phase>
                         <goals>
                             <goal>copy-resources</goal>
                         </goals>
                         <configuration>
-                            <outputDirectory>${basedir}/target/maven-shared-archive-resources/portal</outputDirectory>
+                            <outputDirectory>${basedir}/target/maven-shared-archive-resources/sso</outputDirectory>
                             <resources>
                                 <resource>
-                                    <directory>../../apps/portal</directory>
+                                    <directory>../../apps/sso</directory>
                                 </resource>
                             </resources>
                         </configuration>
@@ -80,7 +80,7 @@
                             <goal>p2-feature-gen</goal>
                         </goals>
                         <configuration>
-                            <id>org.wso2.carbon.dashboards.portal</id>
+                            <id>org.wso2.carbon.dashboards.sso</id>
                             <propertiesFile>../../etc/feature.properties</propertiesFile>
                             <adviceFile>
                                 <properties />

@@ -1,5 +1,5 @@
 <%
-(function() {
+(function () {
     var TYPE = "type";
     var TABLE_NAME = "tableName";
     var TIME_FROM = "timeFrom";
@@ -21,7 +21,7 @@
     var JS_MAX_VALUE = "9007199254740992";
     var JS_MIN_VALUE = "-9007199254740992";
     var ZERO_INDEX = "0";
-    var LAST_INDEX = "-1";
+    var LAST_INDEX = "5000";    //Set the max value to 5000. This is to prevent accidental loading of millions of records.
     var TYPE_CLEAR_INDEX_DATA = 1;
 //    var TYPE_CREATE_TABLE = 2;
 //    var TYPE_DELETE_BY_ID = 3;
@@ -49,17 +49,37 @@
     var TYPE_GET_WITH_KEY_VALUES = 25;
     var TYPE_GET_RECORDSTORES = 26;
     var TYPE_GET_RECORDSTORE_BY_TABLE = 27;
+    var TYPE_WAIT_FOR_INDEXING_FOR_TABLE = 28;
+    var TYPE_SEARCH_WITH_AGGREGATES = 29;
     var log = new Log();
     var carbon = require('carbon');
+    var configs = require('/configs/designer.json');
     var JSUtils = Packages.org.wso2.carbon.analytics.jsservice.Utils;
     var HTTPConstants = Packages.org.apache.axis2.transport.http.HTTPConstants;
-    var AnalyticsWebServiceConnector = Packages.org.wso2.carbon.analytics.jsservice.AnalyticsWebServiceConnector;
+    var AnalyticsCachedWebServiceConnector = Packages.org.wso2.carbon.analytics.jsservice.AnalyticsCachedWebServiceConnector;
+    var AnalyticsCache = Packages.org.wso2.carbon.analytics.jsservice.AnalyticsCachedWebServiceConnector.AnalyticsCache;
     var AnalyticsWebServiceStub = Packages.org.wso2.carbon.analytics.webservice.stub.AnalyticsWebServiceStub;
     var AuthenticationAdminStub = Packages.org.wso2.carbon.authenticator.stub.AuthenticationAdminStub;
+    var cacheTimeoutSeconds = 5;
+    if(configs.cacheTimeoutSeconds) {
+        cacheTimeoutSeconds = parseInt(configs.cacheTimeoutSeconds);
+    }
+    var cacheSizeBytes = 1024 * 1024 * 1024; // 1GB
+    if(configs.cacheSizeBytes) {
+        cacheSizeBytes = parseInt(configs.cacheSizeBytes);
+    }
+
     var analyticsWSUrl = carbon.server.address(HTTPS_TRANSPORT) + ANALYTICS_SERVICE;
     var authenticationWSUrl = carbon.server.address(HTTPS_TRANSPORT) + AUTHENTICATION_SERVICE;
-    var analyticsStub = new AnalyticsWebServiceStub(analyticsWSUrl);
-    var authenticationStub = null;
+    var analyticsStub;
+    try {
+        analyticsStub = new AnalyticsWebServiceStub(analyticsWSUrl);
+    } catch(e) {
+        if (log.isDebugEnabled()) {
+            log.debug("Unable to instantiate AnalyticsWebServiceStub instance. This could be a CEP server. Returning");
+        }
+        return;
+    }
     var serviceClient = analyticsStub._getServiceClient();
     var options = serviceClient.getOptions();
     options.setManageSession(true);
@@ -85,7 +105,14 @@
             return;
         }
     }
-    var connector = new AnalyticsWebServiceConnector(analyticsStub);
+
+    var cache = application.get("AnalyticsWebServiceCache");
+    if (cache == null) {
+        cache = new AnalyticsCache(cacheTimeoutSeconds, cacheSizeBytes);
+        application.put("AnalyticsWebServiceCache", cache);
+    }
+
+    var connector = new AnalyticsCachedWebServiceConnector(analyticsStub, cache);
 
     var type = 0;
     var typeParam = request.getParameter(TYPE);
@@ -103,12 +130,12 @@
     var tableName = request.getParameter(TABLE_NAME);
     if (type != TYPE_LIST_TABLES &&
         //        type != TYPE_PUT_RECORDS &&
-        type != TYPE_PAGINATION_SUPPORTED &&
-        type != TYPE_ADD_STREAM_DEFINITION &&
-        type != TYPE_GET_STREAM_DEFINITION &&
-        type != TYPE_PUBLISH_EVENTS &&
-        type != TYPE_WAIT_FOR_INDEXING &&
-        type != TYPE_GET_RECORDSTORES) {
+            type != TYPE_PAGINATION_SUPPORTED &&
+            type != TYPE_ADD_STREAM_DEFINITION &&
+            type != TYPE_GET_STREAM_DEFINITION &&
+            type != TYPE_PUBLISH_EVENTS &&
+            type != TYPE_WAIT_FOR_INDEXING &&
+            type != TYPE_GET_RECORDSTORES) {
         if (tableName == null) {
             log.error("tableName is not provided!");
             response.status = HTTP_INTERNAL_ERROR;
@@ -119,9 +146,9 @@
 
     var content = request.getContent();
     var contentAsString = null;
-    if (content != ''  && content != null) {
+    if (content != '' && content != null) {
         contentAsString = stringify(content);
-        if(log.isDebugEnabled()) {
+        if (log.isDebugEnabled()) {
             log.debug("value of content: " + contentAsString);
         }
     }
@@ -215,10 +242,10 @@
                 break;
             }
             case TYPE_SET_SCHEMA:
-             {
+            {
                 print(connector.setTableSchema(tableName, contentAsString));
                 break;
-             }
+            }
             case TYPE_GET_SCHEMA:
             {
                 result = connector.getTableSchema(tableName);
@@ -232,13 +259,22 @@
             }
             case TYPE_WAIT_FOR_INDEXING:
             {
-
                 var waitTimeAsString = request.getParameter(WAIT_TIME);
                 var waitTime = -1;
                 if (waitTimeAsString != null) {
                     waitTime = parseInt(waitTimeAsString);
                 }
                 result = connector.waitForIndexing(waitTime * MILLISECONDS_PER_SECOND);
+                break;
+            }
+            case TYPE_WAIT_FOR_INDEXING_FOR_TABLE:
+            {
+                var waitTimeAsString = request.getParameter(WAIT_TIME);
+                var waitTime = -1;
+                if (waitTimeAsString != null) {
+                    waitTime = parseInt(waitTimeAsString);
+                }
+                result = connector.waitForIndexing(tableName, waitTime * MILLISECONDS_PER_SECOND);
                 break;
             }
             case TYPE_DRILLDOWN_CATEGORIES:
@@ -281,15 +317,16 @@
                 result = connector.getRecordStoreByTable(tableName);
                 break;
             }
+            case TYPE_SEARCH_WITH_AGGREGATES:
+            {
+                result = connector.searchWithAggregates(contentAsString);
+                break;
+            }
             default:
                 result = '{ "status": "Failed", "statusCode": "500", "message": "Unidentified operation" }';
         }
-        if (authenticationStub != null) {
-            authenticationStub.logout();
-            authenticationStub = null;
-        }
         if (result != null) {
-            if(log.isDebugEnabled()) {
+            if (log.isDebugEnabled()) {
                 log.debug("value of result: " + result);
                 log.debug("status code: " + result.getstatusCode())
             }
@@ -304,7 +341,8 @@
             print(finalResult);
         }
     } else {
-        print('{ "status": "Failed", "statusCode": "500", "message": "AnalyticsWebServiceConnector is unavailable" }');
+        print('{ "status": "Failed", "statusCode": "500", "message": "AnalyticsCachedWebServiceConnector is unavailable" }');
     }
+
 }());
 %>
